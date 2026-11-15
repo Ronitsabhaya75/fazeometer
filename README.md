@@ -140,3 +140,4 @@ web/src
   pages/              Landing, Home, Profile, WatchVideo, WatchStream, Premium, Call, Streamer
   components/         cards.tsx (videos, streams, events), ui.tsx (bell, popup, skeletons)
 ```
+
