@@ -3,6 +3,7 @@ import { api, getSocket, type Video } from "../api";
 import type { Ctx } from "../App";
 import { loadYT } from "../yt";
 import { AdBanner, VideoCard, fmtDur, fmtViews, gameLabel } from "../components/cards";
+import { copyText } from "../components/ui";
 
 interface BeatAck {
   ok: boolean; reason?: string; coverage?: number; completed?: boolean; counted?: boolean;
@@ -94,7 +95,10 @@ export function WatchVideo({ ctx, videoId }: { ctx: Ctx; videoId: string }) {
           <div className="player ytbox" ref={host} />
         )}
         <h2 className="wtitle">{v.title}</h2>
-        <div className="muted small">{v.channel_title} · {fmtViews(v.views)} views · {gameLabel(v.game)} · {fmtDur(v.duration_sec)}</div>
+        <div className="between">
+          <div className="muted small">{v.channel_title} · {fmtViews(v.views)} views · {gameLabel(v.game)} · {fmtDur(v.duration_sec)}</div>
+          <button className="btn small ghost" onClick={async () => ctx.toast((await copyText(`${location.origin}/#/video/${v.id}`)) ? "Link copied" : "Could not copy the link")}>Share</button>
+        </div>
 
         <div className="panel meter">
           <div className="between">

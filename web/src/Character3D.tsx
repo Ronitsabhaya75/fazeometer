@@ -2,7 +2,7 @@ import { useRef } from "react";
 import { Canvas, useFrame } from "@react-three/fiber";
 import { OrbitControls, ContactShadows } from "@react-three/drei";
 import * as THREE from "three";
-import { PART_SPECS, type PartSpec } from "./partSpecs";
+import { PART_SPECS, SHIP_SPECS, type PartSpec } from "./partSpecs";
 import type { CharacterView } from "./api";
 
 const RARITY_GLOW: Record<string, number> = { common: 0, rare: 0.25, epic: 0.5, legendary: 0.9 };
@@ -66,23 +66,32 @@ function Mannequin() {
 }
 
 export function Character3D({ view, freshIds, focusPosition }: { view: CharacterView; freshIds: Set<string>; focusPosition: number | null }) {
+  const ship = view.kind === "ship";
+  const specs = ship ? SHIP_SPECS : PART_SPECS;
   return (
-    <Canvas camera={{ position: [0, 1.5, 7], fov: 40 }} dpr={[1, 2]}>
+    <Canvas camera={{ position: ship ? [2.6, 2.1, 6.4] : [0, 1.5, 7], fov: 40 }} dpr={[1, 2]}>
       <color attach="background" args={["#0b0e14"]} />
       <ambientLight intensity={0.7} />
       <directionalLight position={[3, 5, 4]} intensity={1.6} />
       <directionalLight position={[-4, 2, -3]} intensity={0.6} color="#C8102E" />
-      <group position={[0, -0.9, 0]}>
-        <Mannequin />
+      <group position={[0, ship ? -0.5 : -0.9, 0]}>
+        {ship ? (
+          <mesh position={[0, -0.4, 0]} rotation={[-Math.PI / 2, 0, 0]}>
+            <circleGeometry args={[3.6, 48]} />
+            <meshStandardMaterial color="#0e4256" roughness={0.4} metalness={0.2} transparent opacity={0.65} />
+          </mesh>
+        ) : (
+          <Mannequin />
+        )}
         {view.parts.map((p) => {
-          const spec = PART_SPECS[p.position];
+          const spec = specs[p.position];
           return spec ? (
-            <Part key={p.id} spec={spec} owned={p.owned} color={view.color} rarity={p.rarity} fresh={freshIds.has(p.id)} focused={focusPosition === p.position} />
+            <Part key={p.id} spec={spec} owned={p.owned} color={spec.color ?? view.color} rarity={p.rarity} fresh={freshIds.has(p.id)} focused={focusPosition === p.position} />
           ) : null;
         })}
         <ContactShadows position={[0, 0, 0]} opacity={0.5} scale={6} blur={2.4} far={2} />
       </group>
-      <OrbitControls enablePan={false} minDistance={3} maxDistance={8} target={[0, 1, 0]} autoRotate autoRotateSpeed={0.9} />
+      <OrbitControls enablePan={false} minDistance={3} maxDistance={ship ? 13 : 8} target={[0, ship ? 1.2 : 1, 0]} autoRotate autoRotateSpeed={0.9} />
     </Canvas>
   );
 }

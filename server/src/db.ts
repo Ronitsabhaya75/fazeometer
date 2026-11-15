@@ -2,7 +2,8 @@ import pg from "pg";
 import { MongoClient, type Db } from "mongodb";
 import { Redis } from "ioredis";
 import { cfg } from "./config.js";
-import { coreSchema, timescaleSteps, plainFallback } from "./schema.js";
+import { timescaleSteps, plainFallback } from "./schema.js";
+import { MIGRATIONS } from "./migrations.js";
 
 export const pool = new pg.Pool({ connectionString: cfg.pgUrl, max: 10 });
 export const redis = new Redis(cfg.redisUrl, { maxRetriesPerRequest: 3, lazyConnect: true });
@@ -21,7 +22,24 @@ export async function connectAll() {
 }
 
 export async function migrate() {
-  for (const stmt of coreSchema) await pool.query(stmt);
+  await pool.query(`CREATE TABLE IF NOT EXISTS schema_migrations (id text PRIMARY KEY, applied_at timestamptz NOT NULL DEFAULT now())`);
+  const done = new Set((await pool.query(`SELECT id FROM schema_migrations`)).rows.map((r) => r.id as string));
+  for (const m of MIGRATIONS) {
+    if (done.has(m.id)) continue;
+    const client = await pool.connect();
+    try {
+      await client.query("BEGIN");
+      await m.run(client);
+      await client.query(`INSERT INTO schema_migrations (id) VALUES ($1)`, [m.id]);
+      await client.query("COMMIT");
+      console.log(`[migrate] applied ${m.id}`);
+    } catch (err) {
+      await client.query("ROLLBACK").catch(() => {});
+      throw new Error(`Migration ${m.id} failed: ${(err as Error).message}`);
+    } finally {
+      client.release();
+    }
+  }
 
   hasTimescale = true;
   for (const stmt of timescaleSteps) {
@@ -41,6 +59,8 @@ export async function migrate() {
   await mdb.collection("surveys").createIndex({ userId: 1 });
   await mdb.collection("part_meta").createIndex({ partId: 1 }, { unique: true });
   await mdb.collection("recommendations").createIndex({ userId: 1, at: -1 });
+  await mdb.collection("notifications").createIndex({ userId: 1, createdAt: -1 });
+  await mdb.collection("notifications").createIndex({ createdAt: 1 }, { expireAfterSeconds: 60 * 60 * 24 * 60 });
 
   console.log(`[tigerdata] ready (${hasTimescale ? "TimescaleDB hypertable" : "plain Postgres fallback"})`);
 }
@@ -48,7 +68,7 @@ export async function migrate() {
 export async function audit(type: string, data: Record<string, unknown>) {
   try {
     await mdb.collection("audit_events").insertOne({ type, ...data, at: new Date() });
-  } catch {
-    /* logging must never break a request */
+  } catch (err) {
+    console.warn(`[audit] could not record ${type}: ${(err as Error).message}`); // logging must never break a request
   }
 }

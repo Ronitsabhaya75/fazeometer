@@ -4,16 +4,17 @@ import { z } from "zod";
 import { pool, q, redis, audit } from "../db.js";
 import { cfg } from "../config.js";
 import { requireAuth, hasEntitlement } from "../auth.js";
-import { HttpError, hashCode, safeEqual } from "../util.js";
+import { HttpError, hashCode, safeEqual, safe } from "../util.js";
 import { keys, getStreamStart, eligibility } from "../watch.js";
 import { emitUser } from "../realtime.js";
+import { notify } from "../notifications.js";
 
 export const router = Router();
 
 router.get("/streams", async (_req, res) => {
   const { rows } = await q(
     `SELECT s.id, s.title, s.game, s.platform, s.embed_id, s.status, s.scheduled_for, s.started_at,
-            CASE WHEN s.platform = 'youtube' AND s.embed_id IS NOT NULL THEN 'https://i.ytimg.com/vi/' || s.embed_id || '/hqdefault.jpg' ELSE NULL END AS thumbnail_url,
+            coalesce(s.thumbnail_url, CASE WHEN s.platform = 'youtube' AND s.embed_id IS NOT NULL THEN 'https://i.ytimg.com/vi/' || s.embed_id || '/mqdefault.jpg' END) AS thumbnail_url,
             st.id AS streamer_id, st.display_name AS streamer, st.country, st.followers, st.is_partner, st.color
      FROM streams s JOIN streamers st ON st.id = s.streamer_id
      WHERE s.status IN ('live','scheduled')
@@ -134,6 +135,7 @@ router.post("/drops/:id/redeem", requireAuth, async (req, res) => {
 
     const payload = { characterId: ch.id, parts: pick.rows, owned, total: ch.total_parts, complete, source: { kind: "stream", title: streamRow?.title } };
     emitUser(user.id, "part:unlocked", payload);
+    safe("notify-relic", notify(user.id, { type: "relic", title: `Relic unlocked: ${pick.rows.map((p) => p.slot).join(", ")}`, body: `For finishing "${streamRow?.title ?? "a live stream"}"`, data: { characterId: ch.id } }));
     if (complete) emitUser(user.id, "character:complete", { characterId: ch.id });
     res.json(payload);
   } catch (err) {

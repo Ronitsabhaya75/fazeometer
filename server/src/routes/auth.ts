@@ -4,41 +4,69 @@ import { q, mdb } from "../db.js";
 import { cfg } from "../config.js";
 import { signToken, loadUser, requireAuth, hasEntitlement } from "../auth.js";
 import { HttpError, ageOf } from "../util.js";
+import { hashPassword, verifyPassword, passwordProblem } from "../password.js";
+import { clientIp, enforce, rateLimit } from "../ratelimit.js";
+import { STREAMERS } from "../catalogData.js";
 
 export const router = Router();
 
+const COOKIE = { httpOnly: true, sameSite: "lax" as const, secure: cfg.cookieSecure, maxAge: 7 * 24 * 3600 * 1000, path: "/" };
+const startSession = (res: import("express").Response, userId: string) => res.cookie("token", signToken(userId), COOKIE);
+
 // Browsers send empty strings for untouched fields, so treat "" as missing.
 const blank = (v: unknown) => (v === "" ? undefined : v);
-const loginSchema = z.object({
-  email: z.string().email().transform((s) => s.toLowerCase()),
-  displayName: z.preprocess(blank, z.string().min(2).max(24).optional()),
-  country: z.preprocess(blank, z.string().length(2).transform((s) => s.toUpperCase()).optional()),
-  birthdate: z.preprocess(blank, z.string().regex(/^\d{4}-\d{2}-\d{2}$/).optional()),
+const email = z.string().trim().email().max(254).transform((s) => s.toLowerCase());
+
+const signupSchema = z.object({
+  email,
+  password: z.string().max(128),
+  displayName: z.string().trim().min(2).max(24),
+  country: z.string().length(2).transform((s) => s.toUpperCase()),
+  birthdate: z.string().regex(/^\d{4}-\d{2}-\d{2}$/),
   game: z.preprocess(blank, z.enum(["cod", "fortnite"]).optional()),
 });
 
-// Hackathon sign-in: email only, no password. Production swaps this for Google / Twitch OAuth.
-router.post("/auth/login", async (req, res) => {
-  const b = loginSchema.parse(req.body);
-  let { rows } = await q(`SELECT id FROM users WHERE email=$1`, [b.email]);
-  let id: string;
-  if (rows[0]) {
-    id = rows[0].id;
-  } else {
-    if (!b.displayName || !b.country || !b.birthdate) throw new HttpError(400, "New accounts need a name, country and birthdate");
-    if (ageOf(b.birthdate) < 13) throw new HttpError(403, "You must be 13 or older to join", "too_young");
-    const r = await q(
-      `INSERT INTO users (email, display_name, country, birthdate, game_pref) VALUES ($1,$2,$3,$4,$5) RETURNING id`,
-      [b.email, b.displayName, b.country, b.birthdate, b.game ?? null],
-    );
-    id = r.rows[0].id;
-  }
-  res.cookie("token", signToken(id), { httpOnly: true, sameSite: "lax", maxAge: 30 * 24 * 3600 * 1000 });
-  res.json({ user: await loadUser(id) });
+router.post("/auth/signup", rateLimit("signup", 5, 3600), async (req, res) => {
+  const b = signupSchema.parse(req.body);
+  const problem = passwordProblem(b.password);
+  if (problem) throw new HttpError(400, problem, "weak_password");
+  if (Number.isNaN(Date.parse(b.birthdate)) || new Date(b.birthdate) > new Date()) throw new HttpError(400, "Enter a real birthdate");
+  if (ageOf(b.birthdate) < 13) throw new HttpError(403, "You must be 13 or older to join", "too_young");
+
+  const hash = await hashPassword(b.password);
+  const r = await q(
+    `INSERT INTO users (email, display_name, country, birthdate, game_pref, password_hash) VALUES ($1,$2,$3,$4,$5,$6)
+     ON CONFLICT (email) DO NOTHING RETURNING id`,
+    [b.email, b.displayName, b.country, b.birthdate, b.game ?? null, hash],
+  );
+  if (!r.rows[0]) throw new HttpError(409, "An account with that email already exists. Try signing in.", "email_taken");
+  startSession(res, r.rows[0].id);
+  res.json({ user: await loadUser(r.rows[0].id) });
+});
+
+router.post("/auth/login", rateLimit("login-ip", 30, 900), async (req, res) => {
+  const b = z.object({ email, password: z.string().max(128) }).parse(req.body);
+  await enforce(`login-email:${b.email}`, 8, 900, "Too many sign-in attempts for this account.");
+  const u = (await q(`SELECT id, password_hash FROM users WHERE email=$1`, [b.email])).rows[0];
+  const ok = await verifyPassword(b.password, u?.password_hash); // same work whether or not the account exists
+  if (!u || !ok) throw new HttpError(401, "Email or password is wrong", "bad_credentials");
+  startSession(res, u.id);
+  res.json({ user: await loadUser(u.id) });
+});
+
+// Passwordless login for the seeded demo streamers. Exists only when DEMO_MODE=1, and only for those exact accounts.
+router.post("/auth/demo-login", rateLimit("demo-login", 30, 900), async (req, res) => {
+  if (!cfg.demoMode) throw new HttpError(404, "Not found");
+  const { email: e } = z.object({ email }).parse(req.body);
+  if (!STREAMERS.some((s) => s.email === e)) throw new HttpError(403, "Demo login is only for the demo streamers");
+  const u = (await q(`SELECT id FROM users WHERE email=$1 AND role='streamer'`, [e])).rows[0];
+  if (!u) throw new HttpError(404, "Demo streamer not found");
+  startSession(res, u.id);
+  res.json({ user: await loadUser(u.id) });
 });
 
 router.post("/auth/logout", (_req, res) => {
-  res.clearCookie("token");
+  res.clearCookie("token", { path: "/" });
   res.json({ ok: true });
 });
 
@@ -60,13 +88,13 @@ router.get("/config", (_req, res) => {
   res.json({
     minuteMs: cfg.minuteMs,
     hbMs: cfg.hbMs,
-    priceCents: cfg.priceCents,
-    tenureDays: cfg.tenureDays,
     demoMode: cfg.demoMode,
     videoHbMs: cfg.videoHbMs,
     videoMinCoverage: cfg.videoMinCoverage,
     videoPartsPerDay: cfg.videoPartsPerDay,
     youtube: Boolean(cfg.youtubeKey),
+    priceCents: cfg.priceCents,
+    tenureMonths: cfg.tenureMonths,
     stripe: Boolean(cfg.stripeKey),
     gemini: Boolean(cfg.geminiKey),
     livekit: Boolean(cfg.livekitKey),
@@ -75,22 +103,22 @@ router.get("/config", (_req, res) => {
 
 router.get("/me", requireAuth, async (req, res) => {
   const u = req.user!;
-  const [premium, adFree, ticket, chars, streak, tenureRow] = await Promise.all([
+  const [premium, adFree, ticket, chars, streak, subRow] = await Promise.all([
     hasEntitlement(u.id, "premium"),
     hasEntitlement(u.id, "ad_free"),
     q(`SELECT source_ref FROM entitlements WHERE user_id=$1 AND kind='ticket_voucher' LIMIT 1`, [u.id]),
     q(
-      `SELECT uc.id, uc.status, t.id AS template_id, t.name, t.game, t.slot_number, t.tier, t.color, t.total_parts,
+      `SELECT uc.id, uc.status, t.id AS template_id, t.name, t.game, t.kind, t.slot_number, t.tier, t.color, t.total_parts,
               (SELECT count(*)::int FROM user_parts up WHERE up.user_character_id = uc.id) AS owned
        FROM user_characters uc JOIN character_templates t ON t.id = uc.template_id
        WHERE uc.user_id=$1 ORDER BY t.slot_number`,
       [u.id],
     ),
     computeStreak(u.id),
-    q(`SELECT min(valid_from) AS since FROM entitlements WHERE user_id=$1 AND kind='premium'`, [u.id]),
+    q(`SELECT status, current_period_end, cancel_at_period_end, months_paid, started_at FROM subscriptions WHERE user_id=$1`, [u.id]),
   ]);
-  const since = tenureRow.rows[0]?.since as Date | null;
-  const days = since ? Math.floor((Date.now() - new Date(since).getTime()) / 86400000) : 0;
+  const sub = subRow.rows[0] ?? null;
+  const months = (sub?.months_paid as number | undefined) ?? 0;
   res.json({
     user: u,
     premium,
@@ -98,7 +126,14 @@ router.get("/me", requireAuth, async (req, res) => {
     streak,
     characters: chars.rows,
     adult: ageOf(u.birthdate) >= 18,
-    tenure: { days, targetDays: cfg.tenureDays, ticketReady: since !== null && days >= cfg.tenureDays, ticketCode: ticket.rows[0]?.source_ref ?? null },
+    subscription: sub && {
+      status: sub.status,
+      active: premium,
+      currentPeriodEnd: sub.current_period_end,
+      cancelAtPeriodEnd: sub.cancel_at_period_end,
+      monthsPaid: months,
+    },
+    tenure: { months, targetMonths: cfg.tenureMonths, ticketReady: months >= cfg.tenureMonths, ticketCode: ticket.rows[0]?.source_ref ?? null },
   });
 });
 
@@ -123,14 +158,14 @@ router.post("/characters/start", requireAuth, async (req, res) => {
   const u = req.user!;
   const t = (await q(`SELECT * FROM character_templates WHERE id=$1`, [templateId])).rows[0];
   if (!t) throw new HttpError(404, "Unknown character");
-  if (t.tier === "premium" && !(await hasEntitlement(u.id, "premium"))) throw new HttpError(402, "The second character costs $5", "premium_required");
+  if (t.tier === "premium" && !(await hasEntitlement(u.id, "premium"))) throw new HttpError(402, "Agamemnon needs the $5 monthly plan", "premium_required");
 
   const c = await q(`INSERT INTO user_characters (user_id, template_id) VALUES ($1,$2) ON CONFLICT DO NOTHING RETURNING id`, [u.id, templateId]);
   let characterId: string;
   if (c.rows[0]) {
     characterId = c.rows[0].id;
     if (t.tier === "free") {
-      // One part is free at sign-up: the Helm.
+      // One part is free at sign-up: the first relic.
       await q(
         `INSERT INTO user_parts (user_character_id, part_id, source_kind, source_title) SELECT $1, id, 'welcome', 'Welcome gift' FROM parts WHERE template_id=$2 AND position=1 ON CONFLICT DO NOTHING`,
         [characterId, templateId],
@@ -139,7 +174,7 @@ router.post("/characters/start", requireAuth, async (req, res) => {
   } else {
     characterId = (await q(`SELECT id FROM user_characters WHERE user_id=$1 AND template_id=$2`, [u.id, templateId])).rows[0].id;
   }
-  if (!u.game_pref) await q(`UPDATE users SET game_pref=$1 WHERE id=$2`, [t.game, u.id]);
+  if (!u.game_pref && (t.game === "cod" || t.game === "fortnite")) await q(`UPDATE users SET game_pref=$1 WHERE id=$2`, [t.game, u.id]);
   res.json({ characterId });
 });
 
@@ -147,7 +182,7 @@ router.get("/me/characters/:id", requireAuth, async (req, res) => {
   const id = z.string().uuid().parse(req.params.id);
   const c = (
     await q(
-      `SELECT uc.id, uc.status, t.id AS template_id, t.name, t.game, t.tier, t.color, t.total_parts
+      `SELECT uc.id, uc.status, t.id AS template_id, t.name, t.game, t.kind, t.tier, t.color, t.total_parts
        FROM user_characters uc JOIN character_templates t ON t.id=uc.template_id WHERE uc.id=$1 AND uc.user_id=$2`,
       [id, req.user!.id],
     )
@@ -161,3 +196,5 @@ router.get("/me/characters/:id", requireAuth, async (req, res) => {
   );
   res.json({ ...c, parts: parts.rows, owned: parts.rows.filter((p) => p.owned).length });
 });
+
+void clientIp; // exported helper used by other routes

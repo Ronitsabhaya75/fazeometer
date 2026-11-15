@@ -1,10 +1,12 @@
 import { Router } from "express";
 import { z } from "zod";
-import { q, redis } from "../db.js";
+import { q, redis, hasTimescale } from "../db.js";
 import { cfg } from "../config.js";
 import { requireStreamer } from "../auth.js";
-import { HttpError, makeCode, hashCode } from "../util.js";
-import { keys, flushHeartbeats, viewersOf, eligibility, getStreamStart } from "../watch.js";
+import { HttpError, makeCode, hashCode, safe } from "../util.js";
+import { keys, viewersOf, eligibility, getStreamStart } from "../watch.js";
+import { finishStream } from "../lifecycle.js";
+import { notifyStreamLive } from "../notifications.js";
 import { emitAll, emitUser } from "../realtime.js";
 import { hasEntitlement } from "../auth.js";
 
@@ -35,11 +37,12 @@ router.post("/streamer/streams", async (req, res) => {
       game: z.enum(["cod", "fortnite"]),
       platform: z.enum(["demo", "twitch", "youtube"]).default("demo"),
       embedId: z.string().max(60).optional(),
+      thumbnailUrl: z.string().url().max(400).refine((u) => u.startsWith("https://"), "Cover art must be an https link").optional(),
     })
     .parse(req.body);
   const r = await q(
-    `INSERT INTO streams (streamer_id, title, game, platform, embed_id, scheduled_for) VALUES ($1,$2,$3,$4,$5, now()) RETURNING *`,
-    [req.user!.streamer_id, b.title, b.game, b.platform, b.embedId ?? null],
+    `INSERT INTO streams (streamer_id, title, game, platform, embed_id, thumbnail_url, scheduled_for) VALUES ($1,$2,$3,$4,$5,$6, now()) RETURNING *`,
+    [req.user!.streamer_id, b.title, b.game, b.platform, b.embedId ?? null, b.thumbnailUrl ?? null],
   );
   res.json(r.rows[0]);
 });
@@ -47,10 +50,19 @@ router.post("/streamer/streams", async (req, res) => {
 router.post("/streamer/streams/:id/start", async (req, res) => {
   const s = await ownStream(z.string().uuid().parse(req.params.id), req.user!.streamer_id!);
   if (s.status !== "scheduled") throw new HttpError(409, "Stream already started");
-  const r = await q(`UPDATE streams SET status='live', started_at=now() WHERE id=$1 RETURNING *`, [s.id]);
+  const r = await q(`UPDATE streams SET status='live', started_at=now(), last_ping_at=now() WHERE id=$1 AND status='scheduled' RETURNING *`, [s.id]);
+  if (!r.rows[0]) throw new HttpError(409, "Stream already started");
   await redis.set(keys.live(s.id), String(new Date(r.rows[0].started_at).getTime()));
   emitAll("stream:live", { streamId: s.id, title: s.title });
+  const streamer = (await q(`SELECT display_name FROM streamers WHERE id=$1`, [s.streamer_id])).rows[0]?.display_name ?? "A streamer";
+  safe("notify-live", notifyStreamLive({ streamId: s.id, title: s.title, game: s.game, streamer, excludeUserId: req.user!.id }));
   res.json(r.rows[0]);
+});
+
+// The Studio pings every 30 seconds while a stream is live. If the pings stop, the reaper ends the stream.
+router.post("/streamer/streams/:id/ping", async (req, res) => {
+  const r = await q(`UPDATE streams SET last_ping_at=now() WHERE id=$1 AND streamer_id=$2 AND status='live'`, [z.string().uuid().parse(req.params.id), req.user!.streamer_id]);
+  res.json({ ok: r.rowCount === 1 });
 });
 
 // The end-of-stream moment: create the secret code, tell eligible viewers a drop is open.
@@ -87,31 +99,32 @@ router.post("/streamer/streams/:id/drop", async (req, res) => {
 
 router.post("/streamer/streams/:id/end", async (req, res) => {
   const s = await ownStream(z.string().uuid().parse(req.params.id), req.user!.streamer_id!);
-  if (s.status !== "live") throw new HttpError(409, "Stream is not live");
-  await flushHeartbeats();
-  const ended = (await q(`UPDATE streams SET status='ended', ended_at=now() WHERE id=$1 RETURNING started_at, ended_at`, [s.id])).rows[0];
-  const total = Math.max(1, Math.ceil((new Date(ended.ended_at).getTime() - new Date(ended.started_at).getTime()) / cfg.minuteMs));
-  const n = Math.min(cfg.finalWindowMin, total);
+  const done = await finishStream(s.id);
+  if (!done) throw new HttpError(409, "Stream is not live");
+  res.json({ ended: true, ...done });
+});
 
-  // Wrap-up: the permanent coverage record comes from the Tiger Data hypertable.
-  const agg = await q(
-    `SELECT user_id, count(DISTINCT minute_index)::int AS minutes,
-            count(DISTINCT minute_index) FILTER (WHERE minute_index >= $2)::int AS final_minutes
-     FROM heartbeats WHERE stream_id=$1 AND player_state='playing' GROUP BY user_id`,
-    [s.id, total - n],
-  );
-  for (const r of agg.rows) {
-    const minutes = Math.min(r.minutes, total);
-    await q(
-      `INSERT INTO watch_sessions (user_id, stream_id, minutes_watched, coverage, in_final_window) VALUES ($1,$2,$3,$4,$5)
-       ON CONFLICT (user_id, stream_id) DO UPDATE SET minutes_watched=EXCLUDED.minutes_watched, coverage=EXCLUDED.coverage, in_final_window=EXCLUDED.in_final_window`,
-      [r.user_id, s.id, minutes, minutes / total, r.final_minutes >= Math.ceil(n * cfg.finalWindowShare)],
-    );
-    await q(`UPDATE users SET credits = credits + $1 WHERE id=$2`, [Math.min(minutes, 120), r.user_id]);
-  }
-  await redis.del(keys.live(s.id));
-  emitAll("stream:ended", { streamId: s.id });
-  res.json({ ended: true, viewers: agg.rows.length, totalMinutes: total });
+// Viewers over time, read straight from the Tiger Data hypertable with time_bucket.
+router.get("/streamer/streams/:id/analytics", async (req, res) => {
+  const s = await ownStream(z.string().uuid().parse(req.params.id), req.user!.streamer_id!);
+  const secs = Math.max(1, cfg.minuteMs / 1000);
+  const bucket = hasTimescale ? "time_bucket(make_interval(secs => $2::double precision), time)" : "to_timestamp(floor(extract(epoch FROM time) / $2::double precision) * $2::double precision)";
+  const [series, totals, redeemed] = await Promise.all([
+    q(
+      `SELECT ${bucket} AS t, count(DISTINCT user_id)::int AS viewers
+       FROM heartbeats WHERE stream_id=$1 AND player_state='playing' GROUP BY 1 ORDER BY 1`,
+      [s.id, secs],
+    ),
+    q(`SELECT count(DISTINCT user_id)::int AS unique_viewers FROM heartbeats WHERE stream_id=$1 AND player_state='playing'`, [s.id]),
+    q(`SELECT count(*)::int AS n FROM drop_redemptions r JOIN drops d ON d.id = r.drop_id WHERE d.stream_id=$1`, [s.id]),
+  ]);
+  const points = series.rows.map((r) => ({ t: r.t, viewers: r.viewers }));
+  res.json({
+    series: points,
+    peak: points.reduce((m, p) => Math.max(m, p.viewers), 0),
+    uniqueViewers: totals.rows[0].unique_viewers,
+    relicsClaimed: redeemed.rows[0].n,
+  });
 });
 
 router.post("/streamer/slots", async (req, res) => {

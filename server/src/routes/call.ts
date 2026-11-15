@@ -22,7 +22,7 @@ async function callStatus(userId: string, birthdate: string) {
   const completedCalls = (await q(`SELECT count(*)::int AS n FROM call_slots WHERE booked_by=$1 AND status='completed'`, [userId])).rows[0].n as number;
   let reason: string | null = null;
   if (!adult) reason = "Live calls are for fans 18 and older.";
-  else if (done === 0) reason = "Complete a character (all 30 parts) to unlock your call.";
+  else if (done === 0) reason = "Complete your ship (all 30 relics) to unlock your call.";
   else if (done <= completedCalls) reason = "You used the call for your completed character. Complete another to earn the next one.";
   return { eligible: reason === null, reason, booked: booked ?? null, survey: survey ? { nation: survey.nation, game: survey.game } : null };
 }

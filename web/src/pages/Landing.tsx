@@ -7,22 +7,22 @@ import "./landing.css";
 const LandingScene = lazy(() => import("../three/OdysseyScene").then((m) => ({ default: m.LandingScene })));
 
 const CHAPTERS = [
-  { n: "I", title: "Embark", text: "Choose Call of Duty or Fortnite and claim your hero. One relic waits at the dock, free." },
+  { n: "I", title: "Embark", text: "Pick your favorite game and interests, then launch your Odyssey ship. One relic waits at the dock, free." },
   { n: "II", title: "Endure", text: "Watch your streamers to the final minute. At the end they speak a secret word. Only those who stayed can claim a relic." },
-  { n: "III", title: "Return", text: "Thirty relics make a hero whole. The gods grant a live video call and a play session with a partner streamer." },
+  { n: "III", title: "Return", text: "Thirty relics finish your ship. The gods grant a live video call and a play session with a partner streamer." },
 ];
 
 export function Landing({ onDone, cfg }: { onDone: () => void; cfg: AppConfig }) {
-  const [f, setF] = useState({ email: "", displayName: "", country: "US", birthdate: "2000-01-01", game: "cod" });
+  const [f, setF] = useState({ email: "", password: "", displayName: "", country: "US", birthdate: "2000-01-01", game: "cod" });
   const [mode, setMode] = useState<"new" | "returning">("new");
   const [err, setErr] = useState("");
   const [busy, setBusy] = useState(false);
 
-  const submit = async (body: object) => {
+  const submit = async (path: string, body: object) => {
     setBusy(true);
     setErr("");
     try {
-      await api("POST", "/auth/login", body);
+      await api("POST", path, body);
       onDone();
     } catch (e: any) {
       setErr(e.message);
@@ -47,7 +47,7 @@ export function Landing({ onDone, cfg }: { onDone: () => void; cfg: AppConfig })
             <span className="kicker">A FaZe Clan voyage</span>
             <h1>FaZe <span>Odyssey</span></h1>
             <p className="tagline">Every stream is a voyage. Stay to the last horizon.</p>
-            <p className="lede">Watch FaZe videos and live streams on one feed built around you. Finish them to earn the thirty relics of an Odyssey hero, show them off on your profile, and sail home with a live call from a streamer.</p>
+            <p className="lede">Watch FaZe videos and live streams on one feed built around you. Finish them to earn the thirty relics of an Odyssey ship, show it off on your profile, and sail home with a live call from a streamer.</p>
             <div className="hero-cta">
               <a className="gold-btn" href="#join" onClick={() => setMode("new")}>Begin the voyage</a>
               <a className="ghost-btn" href="#join" onClick={() => setMode("returning")}>Continue the voyage</a>
@@ -79,7 +79,7 @@ export function Landing({ onDone, cfg }: { onDone: () => void; cfg: AppConfig })
         <div className="wrap">
           <span className="kicker">Thirty relics</span>
           <h2>One relic at the dock. Twenty-nine to win.</h2>
-          <p className="band-lede">Every hero is built from the same thirty relics, from the common Helm to the legendary Odyssey Crest. Rarer relics glow brighter.</p>
+          <p className="band-lede">Your free build is a Greek war galley made of thirty relics, from the common Keel to the legendary Odyssey Crest. Rarer relics glow brighter.</p>
           <ol className="relics">
             {RELICS.map((name, i) => (
               <li key={name} className={relicRarity(i + 1)}>
@@ -93,20 +93,20 @@ export function Landing({ onDone, cfg }: { onDone: () => void; cfg: AppConfig })
 
       <section className="band">
         <div className="wrap">
-          <span className="kicker">Two epics</span>
-          <h2>Pick your war</h2>
+          <span className="kicker">Two builds</span>
+          <h2>A ship first, then a king</h2>
           <div className="epics">
             <article className="war cod">
-              <span className="game">Call of Duty</span>
-              <h3>Odysseus Operator</h3>
-              <p>Bronze armor over tactical kit. The wily strategist who always finds the way home.</p>
-              <span className="premium">Second hero: Poseidon's Reaper</span>
+              <span className="game">Free build</span>
+              <h3>Trireme of Ithaca</h3>
+              <p>A Greek war galley with a crimson sail, rows of shields and a gold prow. Every fan starts here with one relic given.</p>
+              <span className="premium">Thirty relics from videos and live streams</span>
             </article>
             <article className="war fn">
-              <span className="game">Fortnite</span>
-              <h3>Ithaca Builder</h3>
-              <p>Bright colors, a builder's craft, and a siren song for the second voyage.</p>
-              <span className="premium">Second hero: Siren Drop</span>
+              <span className="game">Second build, $5 a month</span>
+              <h3>Agamemnon, King of Mycenae</h3>
+              <p>The bronze-and-gold king who led the fleet to Troy. Build him relic by relic, with premium-only drops.</p>
+              <span className="premium">For fans who finished the ship</span>
             </article>
           </div>
         </div>
@@ -117,9 +117,9 @@ export function Landing({ onDone, cfg }: { onDone: () => void; cfg: AppConfig })
           <span className="kicker">Gifts of the gods</span>
           <h2>What the voyage earns</h2>
           <div className="gifts">
-            <article><h3>A live call</h3><p>Finish a hero and meet a partner streamer from your nation, on video, then play together live.</p></article>
-            <article><h3>A second hero, $5</h3><p>You have already proved you stay to the end. Pay once to build another, with premium-only drops and no ads.</p></article>
-            <article><h3>A free regional ticket</h3><p>Two years as a paying member and the gods grant a ticket to a regional tournament.</p></article>
+            <article><h3>A live call</h3><p>Finish your ship and meet a partner streamer from your nation, on video, then play together live.</p></article>
+            <article><h3>Agamemnon, $5 a month</h3><p>You have already proved you stay to the end. Subscribe to build the king, with premium-only drops and no ads. Cancel any time.</p></article>
+            <article><h3>A free regional ticket</h3><p>After 24 paid months the gods grant a ticket to a regional tournament.</p></article>
           </div>
         </div>
       </section>
@@ -129,16 +129,20 @@ export function Landing({ onDone, cfg }: { onDone: () => void; cfg: AppConfig })
           <div className="join-copy">
             <span className="kicker">Join the crew</span>
             <h2>Your ship is waiting at the dock</h2>
-            <p className="band-lede">Sign up, pick your hero, and take your first relic for free. Returning voyagers sign in with just an email.</p>
+            <p className="band-lede">Sign up, launch your ship, and take your first relic for free. Returning voyagers sign in with their email and password.</p>
           </div>
 
-      <form className="join" onSubmit={(e) => { e.preventDefault(); void submit(mode === "new" ? f : { email: f.email }); }}>
+      <form className="join" onSubmit={(e) => { e.preventDefault(); void (mode === "new" ? submit("/auth/signup", f) : submit("/auth/login", { email: f.email, password: f.password })); }}>
         <h2>{mode === "new" ? "Join the crew" : "Continue the voyage"}</h2>
         <div className="mode-tabs" role="tablist">
           <button type="button" className={mode === "new" ? "on" : ""} onClick={() => setMode("new")}>New voyager</button>
           <button type="button" className={mode === "returning" ? "on" : ""} onClick={() => setMode("returning")}>Returning</button>
         </div>
         <label>Email<input type="email" required value={f.email} onChange={(e) => setF({ ...f, email: e.target.value })} /></label>
+        <label>Password
+          <input type="password" required minLength={mode === "new" ? 10 : 1} maxLength={128} autoComplete={mode === "new" ? "new-password" : "current-password"} value={f.password} onChange={(e) => setF({ ...f, password: e.target.value })} />
+        </label>
+        {mode === "new" && <span className="fine">At least 10 characters.</span>}
         {mode === "new" && <>
         <label>Display name<input minLength={2} maxLength={24} value={f.displayName} onChange={(e) => setF({ ...f, displayName: e.target.value })} /></label>
         <div className="two">
@@ -156,7 +160,7 @@ export function Landing({ onDone, cfg }: { onDone: () => void; cfg: AppConfig })
           </select>
         </label>
         </>}
-        <p className="fine">{mode === "new" ? "Live calls are for fans 18 and older." : "Welcome back. Enter your email to pick up where you left off."}</p>
+        <p className="fine">{mode === "new" ? "Live calls are for fans 18 and older." : "Welcome back. Sign in to pick up where you left off."}</p>
         {err && <p className="form-error">{err}</p>}
         <button className="gold-btn full" disabled={busy}>{busy ? "…" : mode === "new" ? "Begin the voyage" : "Continue the voyage"}</button>
         {cfg.demoMode && (
@@ -164,7 +168,7 @@ export function Landing({ onDone, cfg }: { onDone: () => void; cfg: AppConfig })
             <span>Demo streamer accounts</span>
             <div className="two">
               {[["NovaStrike", "nova@faze.dev"], ["RexFN", "rex@faze.dev"], ["LunaPlays", "luna@faze.dev"]].map(([n, e]) => (
-                <button type="button" key={e} className="ghost-btn small" onClick={() => submit({ email: e })}>{n}</button>
+                <button type="button" key={e} className="ghost-btn small" onClick={() => submit("/auth/demo-login", { email: e })}>{n}</button>
               ))}
             </div>
           </div>

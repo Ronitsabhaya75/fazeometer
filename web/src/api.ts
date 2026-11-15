@@ -36,20 +36,21 @@ export interface Me {
   showAds: boolean;
   streak: number;
   adult: boolean;
-  characters: { id: string; status: string; template_id: string; name: string; game: string; slot_number: number; tier: string; color: string; total_parts: number; owned: number }[];
-  tenure: { days: number; targetDays: number; ticketReady: boolean; ticketCode: string | null };
+  characters: { id: string; status: string; template_id: string; name: string; game: string; kind?: string; slot_number: number; tier: string; color: string; total_parts: number; owned: number }[];
+  subscription: { status: string; active: boolean; currentPeriodEnd: string; cancelAtPeriodEnd: boolean; monthsPaid: number } | null;
+  tenure: { months: number; targetMonths: number; ticketReady: boolean; ticketCode: string | null };
 }
-export interface AppConfig { minuteMs: number; hbMs: number; videoHbMs: number; videoMinCoverage: number; videoPartsPerDay: number; priceCents: number; tenureDays: number; demoMode: boolean; stripe: boolean; gemini: boolean; livekit: boolean; youtube: boolean }
+export interface AppConfig { minuteMs: number; hbMs: number; videoHbMs: number; videoMinCoverage: number; videoPartsPerDay: number; priceCents: number; tenureMonths: number; demoMode: boolean; stripe: boolean; gemini: boolean; livekit: boolean; youtube: boolean }
 export interface StreamRow {
   id: string; title: string; game: string; platform: string; embed_id: string | null; status: string;
   thumbnail_url?: string | null; scheduled_for?: string | null; started_at?: string | null; description?: string;
   streamer_id: string; streamer: string; country: string; followers: number; is_partner: boolean; color: string;
 }
 export interface Template { id: string; game: string; slot_number: number; tier: string; name: string; theme: string; color: string; parts: { id: string; position: number; slot: string; rarity: string; lore: string }[] }
-export interface CharacterView { id: string; name: string; game: string; tier: string; color: string; total_parts: number; owned: number; status: string; parts: { id: string; position: number; slot: string; rarity: string; owned: boolean }[] }
+export interface CharacterView { id: string; name: string; game: string; kind?: string; tier: string; color: string; total_parts: number; owned: number; status: string; parts: { id: string; position: number; slot: string; rarity: string; owned: boolean }[] }
 
 export interface Video {
-  id: string; youtube_id: string; title: string; description: string; thumbnail_url: string; duration_sec: number; views: number;
+  id: string; youtube_id: string; title: string; description?: string; thumbnail_url: string; duration_sec: number; views: number;
   channel_title: string; game: string; topics: string[]; published_at: string | null; streamer: string | null;
   coverage: number | null; last_position: number | null; completed: boolean | null;
 }
@@ -67,4 +68,4 @@ export interface ProfileData {
   streams: { id: string; title: string; game: string; minutes_watched: number; coverage: number }[];
 }
 export interface ProfilePart { id: string; position: number; slot: string; rarity: string; owned: boolean; unlocked_at: string | null; source_kind: string | null; source_title: string | null }
-export interface ProfileCharacter { id: string; name: string; game: string; tier: string; color: string; total_parts: number; owned: number; status: string; template_id: string; slot_number: number; parts: ProfilePart[] }
+export interface ProfileCharacter { id: string; name: string; game: string; kind?: string; tier: string; color: string; total_parts: number; owned: number; status: string; template_id: string; slot_number: number; parts: ProfilePart[] }

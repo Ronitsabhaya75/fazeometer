@@ -26,10 +26,15 @@ export async function getStreamStart(streamId: string): Promise<number | null> {
 type Row = [Date, string, string, string, number, number, string];
 let buffer: Row[] = [];
 
+const MAX_BUFFER = 50_000;
+let droppedRows = 0;
+
+/** Batch-inserts buffered heartbeats. A failed batch goes back in the buffer and is retried on the next tick. */
 export async function flushHeartbeats() {
   if (buffer.length === 0) return;
   const rows = buffer;
   buffer = [];
+  const failed: Row[] = [];
   for (let i = 0; i < rows.length; i += 500) {
     const chunk = rows.slice(i, i + 500);
     const params: any[] = [];
@@ -44,7 +49,16 @@ export async function flushHeartbeats() {
         params,
       );
     } catch (err) {
-      console.error("[heartbeat writer] insert failed, dropping chunk", (err as Error).message);
+      console.error(`[heartbeat writer] insert failed, will retry ${chunk.length} rows:`, (err as Error).message);
+      failed.push(...chunk);
+    }
+  }
+  if (failed.length) {
+    buffer = failed.concat(buffer);
+    if (buffer.length > MAX_BUFFER) {
+      droppedRows += buffer.length - MAX_BUFFER;
+      buffer = buffer.slice(buffer.length - MAX_BUFFER); // keep the newest, and say so loudly
+      console.error(`[heartbeat writer] buffer full, dropped ${droppedRows} oldest rows in total`);
     }
   }
 }

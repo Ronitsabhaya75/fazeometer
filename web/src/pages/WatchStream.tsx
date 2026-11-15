@@ -128,7 +128,7 @@ export function WatchStream({ ctx, streamId }: { ctx: Ctx; streamId: string }) {
   if (!stream) return <div className="panel">Loading stream…</div>;
 
   const embed =
-    stream.platform === "youtube" && stream.embed_id ? `https://www.youtube.com/embed/${stream.embed_id}?autoplay=1&mute=1`
+    stream.platform === "youtube" && stream.embed_id ? `https://www.youtube.com/embed/${stream.embed_id}?rel=0&playsinline=1`
     : stream.platform === "twitch" && stream.embed_id ? `https://player.twitch.tv/?channel=${stream.embed_id}&parent=${location.hostname}&muted=true`
     : null;
 

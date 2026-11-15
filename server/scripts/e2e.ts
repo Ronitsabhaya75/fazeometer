@@ -13,6 +13,8 @@ const check = (name: string, ok: boolean, extra = "") => {
 };
 const sleep = (ms: number) => new Promise((r) => setTimeout(r, ms));
 
+const PASSWORD = "E2e-pass-1234!";
+
 class Client {
   cookie = "";
   async api(method: string, path: string, body?: unknown) {
@@ -29,13 +31,16 @@ class Client {
     try { json = JSON.parse(text); } catch { /* redirect or empty */ }
     return { status: r.status, json };
   }
+  signup(email: string, name: string, extra: Record<string, unknown> = {}) {
+    return this.api("POST", "/auth/signup", { email, password: PASSWORD, displayName: name, country: "US", birthdate: "2000-05-05", game: "cod", ...extra });
+  }
 }
 
 async function watcher(email: string, name: string, streamId: string, cfg: any, behavior: "full" | "late") {
   const c = new Client();
-  const login = await c.api("POST", "/auth/login", { email, displayName: name, country: "US", birthdate: "2000-05-05", game: "cod" });
+  const login = await c.signup(email, name);
   if (login.status !== 200) throw new Error(`login failed: ${JSON.stringify(login.json)}`);
-  const tpl = (await c.api("GET", "/catalog/characters?game=cod")).json.find((t: any) => t.tier === "free");
+  const tpl = (await c.api("GET", "/catalog/characters")).json.find((t: any) => t.tier === "free");
   await c.api("POST", "/characters/start", { templateId: tpl.id });
 
   const events: any[] = [];
@@ -62,9 +67,9 @@ async function watcher(email: string, name: string, streamId: string, cfg: any, 
 // ---- video watch proof helpers ----
 async function videoViewer(email: string, name: string) {
   const c = new Client();
-  const login = await c.api("POST", "/auth/login", { email, displayName: name, country: "US", birthdate: "2000-05-05", game: "cod" });
+  const login = await c.signup(email, name);
   if (login.status !== 200) throw new Error(`login failed: ${JSON.stringify(login.json)}`);
-  const tpl = (await c.api("GET", "/catalog/characters?game=cod")).json.find((t: any) => t.tier === "free");
+  const tpl = (await c.api("GET", "/catalog/characters")).json.find((t: any) => t.tier === "free");
   await c.api("POST", "/characters/start", { templateId: tpl.id });
   const socket = connect(BASE, { extraHeaders: { cookie: c.cookie }, transports: ["websocket"] });
   await new Promise<void>((res, rej) => { socket.on("connect", () => res()); socket.on("connect_error", rej); });
@@ -95,7 +100,20 @@ async function main() {
 
   // Streamer goes live
   const nova = new Client();
-  check("streamer login", (await nova.api("POST", "/auth/login", { email: "nova@faze.dev" })).status === 200);
+  check("streamer demo login", (await nova.api("POST", "/auth/demo-login", { email: "nova@faze.dev" })).status === 200);
+
+  // ---- security checks ----
+  const anon = new Client();
+  check("signed-out users cannot read the feed", (await anon.api("GET", "/feed")).status === 401);
+  check("email-only login no longer works", (await anon.api("POST", "/auth/login", { email: "nova@faze.dev" })).status === 400);
+  check("a streamer account cannot be entered with a guessed password", (await anon.api("POST", "/auth/login", { email: "nova@faze.dev", password: "guess-guess-1234" })).status === 401);
+  check("demo login refuses non-demo accounts", (await anon.api("POST", "/auth/demo-login", { email: "someone@example.com" })).status === 403);
+  check("weak passwords are refused at sign-up", (await anon.signup(`weak${Date.now()}@test.dev`, "Weak", { password: "password123" })).status === 400);
+  const evil = await fetch(`${BASE}/api/auth/logout`, { method: "POST", headers: { origin: "https://evil.example", "content-type": "application/json" }, body: "{}" });
+  check("requests from another website are blocked (CSRF)", evil.status === 403);
+  const asFan = new Client();
+  await asFan.signup(`sec${Date.now()}@test.dev`, "SecFan");
+  check("a fan cannot use streamer endpoints", (await asFan.api("POST", "/streamer/streams", { title: "Nope nope", game: "cod" })).status === 403);
   const created = (await nova.api("POST", "/streamer/streams", { title: "E2E stream", game: "cod", platform: "demo" })).json;
   const started = await nova.api("POST", `/streamer/streams/${created.id}/start`);
   check("stream goes live", started.status === 200 && started.json.status === "live");
@@ -108,7 +126,11 @@ async function main() {
 
   // A second tab for the same account kicks the first one.
   const dup = new Client();
-  await dup.api("POST", "/auth/login", { email: `dup${stamp}@test.dev`, displayName: "TwoTabs", country: "US", birthdate: "2000-05-05" });
+  await dup.signup(`dup${stamp}@test.dev`, "TwoTabs");
+  check("signing up twice with one email is refused", (await new Client().signup(`dup${stamp}@test.dev`, "Copycat")).status === 409);
+  const relog = new Client();
+  check("the right password signs in", (await relog.api("POST", "/auth/login", { email: `dup${stamp}@test.dev`, password: PASSWORD })).status === 200);
+  check("a wrong password does not", (await new Client().api("POST", "/auth/login", { email: `dup${stamp}@test.dev`, password: "wrong-pass-9999" })).status === 401);
   const dupSocket = connect(BASE, { extraHeaders: { cookie: dup.cookie }, transports: ["websocket"] });
   await new Promise<void>((res, rej) => { dupSocket.on("connect", () => res()); dupSocket.on("connect_error", rej); });
   let kicked = false;
@@ -146,7 +168,7 @@ async function main() {
   check("redeeming twice is refused", again.status === 409 && again.json.code === "already_redeemed");
 
   // Premium gate
-  const premTpl = (await full.c.api("GET", "/catalog/characters?game=cod")).json.find((t: any) => t.tier === "premium");
+  const premTpl = (await full.c.api("GET", "/catalog/characters")).json.find((t: any) => t.tier === "premium");
   const premStart = await full.c.api("POST", "/characters/start", { templateId: premTpl.id });
   check("second character needs payment", premStart.status === 402);
   const checkout = await full.c.api("POST", "/billing/checkout", {});
@@ -154,9 +176,19 @@ async function main() {
   if (checkout.json?.mock) {
     await full.c.api("GET", checkout.json.url.replace("/api", ""));
     const me = (await full.c.api("GET", "/me")).json;
-    check("mock payment grants premium and removes ads", me.premium === true && me.showAds === false);
+    check("first monthly payment grants premium and removes ads", me.premium === true && me.showAds === false);
+    check("the subscription shows one paid month", me.subscription?.active === true && me.subscription.monthsPaid === 1, `months=${me.subscription?.monthsPaid}`);
     const premStart2 = await full.c.api("POST", "/characters/start", { templateId: premTpl.id });
-    check("second character starts after paying", premStart2.status === 200);
+    check("Agamemnon starts after subscribing", premStart2.status === 200);
+    await full.c.api("POST", "/billing/cancel");
+    check("cancelling keeps access until the period ends", (await full.c.api("GET", "/me")).json.subscription.cancelAtPeriodEnd === true && (await full.c.api("GET", "/me")).json.premium === true);
+    await full.c.api("POST", "/billing/resume");
+    check("a ticket is refused before 24 paid months", (await full.c.api("POST", "/me/ticket/claim")).status === 403);
+    await full.c.api("POST", "/demo/advance-subscription", { months: 23 });
+    const me24 = (await full.c.api("GET", "/me")).json;
+    check("24 paid months makes the ticket claimable", me24.tenure.months === 24 && me24.tenure.ticketReady === true, `months=${me24.tenure.months}`);
+    const ticket = await full.c.api("POST", "/me/ticket/claim");
+    check("the ticket voucher is issued", ticket.status === 200 && /^TKT-/.test(ticket.json.code));
   }
 
   // End the stream and check the wrap-up record in Tiger Data
@@ -167,6 +199,9 @@ async function main() {
   const me = (await full.c.api("GET", "/me")).json;
   check("streak counts today", me.streak >= 1, `streak=${me.streak}`);
   check("credits were awarded", me.user.credits > 0, `credits=${me.user.credits}`);
+
+  const an = await nova.api("GET", `/streamer/streams/${streamId}/analytics`);
+  check("streamer analytics come from the hypertable", an.status === 200 && an.json.series.length > 0 && an.json.uniqueViewers >= 2, `peak=${an.json?.peak} unique=${an.json?.uniqueViewers}`);
 
   const recs = await full.c.api("GET", "/recommendations?fresh=1");
   check("recommendations return real streams", recs.status === 200 && Array.isArray(recs.json.streams), `source=${recs.json?.source}`);
@@ -186,6 +221,11 @@ async function main() {
   await sleep(300);
   check("socket pushed part:unlocked with the video as source", honest.events.some((e) => e.source?.kind === "video"));
   check("seeking ahead earns nothing", !sAcks.some((a) => a.completed) && (sAcks.at(-1)?.coverage ?? 0) < 0.3, `coverage=${Math.round((sAcks.at(-1)?.coverage ?? 0) * 100)}%`);
+  const vid2 = (await nova.api("POST", "/demo/fake-video", { title: "Second video", durationSec: DUR })).json.id as string;
+  // refresh the skipper's "currently watching" lock with a beat on the first video, then try a second one right away
+  await new Promise((res) => skipper.socket.emit("vhb", { videoId: vid, seq: Date.now(), position: 0, state: "playing", visible: true, rate: 1 }, res));
+  const parallel: any = await new Promise((res) => skipper.socket.emit("vhb", { videoId: vid2, seq: Date.now(), position: 0, state: "playing", visible: true, rate: 1 }, res));
+  check("one account cannot watch two videos at once", parallel.ok === false && parallel.reason === "another_video_active", parallel.reason);
   const replay = await playVideo(honest, vid, "honest", DUR, vhb);
   check("a finished video cannot award twice", replay[0]?.completed === true && !replay[0]?.award);
 
@@ -194,13 +234,25 @@ async function main() {
   check("profile lists the achievement with its source", profile.achievements.some((a: any) => a.kind === "video" && a.title === "E2E video"));
   check("profile has the full 30-relic picture", profile.characters[0]?.parts?.length === 30);
 
+  const notes = (await honest.c.api("GET", "/notifications")).json;
+  check("the relic produced a notification", notes.unread >= 1 && notes.items.some((n: any) => n.type === "relic"), `unread=${notes.unread}`);
+  const t0 = Date.now();
   const feed = (await honest.c.api("GET", "/feed")).json;
+  check("the feed answers fast without waiting on Gemini", Date.now() - t0 < 2500, `${Date.now() - t0}ms`);
   check("feed has live, upcoming and events", Array.isArray(feed.live) && feed.upcoming.length > 0 && feed.events.length > 0, `live=${feed.live.length} upcoming=${feed.upcoming.length} events=${feed.events.length}`);
-  check("feed returns video sections", Array.isArray(feed.forYou) && Array.isArray(feed.latest), `forYou=${feed.forYou.length} source=${feed.source}`);
+  check("feed returns video sections", Array.isArray(feed.forYou) && Array.isArray(feed.continueWatching), `forYou=${feed.forYou.length} source=${feed.source}`);
   const setInt = await honest.c.api("PUT", "/me/interests", { interests: ["cod", "tournaments", "not-a-real-interest"] });
   check("interests are saved and unknown ones dropped", setInt.json.interests.length === 2);
   honest.socket.close(); skipper.socket.close();
   await nova.api("POST", "/demo/cleanup-fake-videos");
+
+  // ---- abandoned streams end by themselves ----
+  const stale = (await nova.api("POST", "/streamer/streams", { title: "Abandoned stream", game: "cod", platform: "demo" })).json;
+  await nova.api("POST", `/streamer/streams/${stale.id}/start`);
+  await sleep(2200); // the test server uses STREAM_PING_TIMEOUT_MS=1500
+  const reaped = await nova.api("POST", "/demo/reap");
+  const liveNow = (await nova.api("GET", "/streams")).json as any[];
+  check("a stream with no streamer pings is ended by the reaper", reaped.json.reaped >= 1 && !liveNow.some((x) => x.id === stale.id && x.status === "live"), `reaped=${reaped.json?.reaped}`);
 
   full.socket.close(); late.socket.close();
   console.log(failures ? `\n${failures} check(s) failed` : "\nAll checks passed");

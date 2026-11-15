@@ -3,6 +3,7 @@ import { q, redis, mdb } from "../db.js";
 import { requireAuth } from "../auth.js";
 import { geminiJson } from "../gemini.js";
 import { keys } from "../watch.js";
+import { rateLimit } from "../ratelimit.js";
 
 export const router = Router();
 
@@ -21,7 +22,7 @@ const SCHEMA = {
   required: ["streams", "streamers"],
 };
 
-router.get("/recommendations", requireAuth, async (req, res) => {
+router.get("/recommendations", requireAuth, rateLimit("recs", 20, 60, true), async (req, res) => {
   const u = req.user!;
   const cached = await redis.get(keys.recs(u.id));
   if (cached && req.query.fresh !== "1") return res.json(JSON.parse(cached));

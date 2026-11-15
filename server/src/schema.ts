@@ -203,6 +203,7 @@ export const coreSchema: string[] = [
     PRIMARY KEY (user_id, event_id)
   )`,
   `ALTER TABLE streams ADD COLUMN IF NOT EXISTS description text NOT NULL DEFAULT ''`,
+  `ALTER TABLE character_templates ADD COLUMN IF NOT EXISTS kind text NOT NULL DEFAULT 'hero'`,
 ];
 
 // Timescale features. Each runs on its own and may fail on plain Postgres.

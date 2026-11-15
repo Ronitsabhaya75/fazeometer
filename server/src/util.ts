@@ -40,3 +40,8 @@ export const ageOf = (birthdate: string | Date) => {
   if (m < 0 || (m === 0 && now.getUTCDate() < b.getUTCDate())) age--;
   return age;
 };
+
+/** Runs fire-and-forget work and logs a failure instead of swallowing it. */
+export function safe(label: string, work: Promise<unknown>): void {
+  work.catch((err) => console.warn(`[${label}] ${(err as Error).message}`));
+}

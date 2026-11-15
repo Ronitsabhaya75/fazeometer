@@ -6,11 +6,16 @@ import { cfg } from "../config.js";
 import { requireAuth } from "../auth.js";
 import { HttpError } from "../util.js";
 import { syncYoutube } from "../youtube.js";
+import { rateLimit } from "../ratelimit.js";
+import { reapStaleStreams } from "../lifecycle.js";
 
 export const router = Router();
 
+// List rows are kept small: a 320x180 thumbnail (about 19 kB instead of 130 kB) and no long description.
 export const VIDEO_SELECT = `
-  v.id, v.youtube_id, v.title, v.description, v.thumbnail_url, v.duration_sec, v.views::float AS views, v.channel_title, v.game, v.topics, v.published_at,
+  v.id, v.youtube_id, v.title,
+  CASE WHEN v.thumbnail_url = '' THEN '' ELSE 'https://i.ytimg.com/vi/' || v.youtube_id || '/mqdefault.jpg' END AS thumbnail_url,
+  v.duration_sec, v.views::float AS views, v.channel_title, v.game, v.topics, v.published_at,
   st.display_name AS streamer,
   vp.coverage, vp.last_position, vp.completed`;
 
@@ -19,7 +24,7 @@ export const VIDEO_FROM = `
   LEFT JOIN streamers st ON st.id = v.streamer_id
   LEFT JOIN video_progress vp ON vp.video_id = v.id AND vp.user_id = $1`;
 
-router.get("/videos", requireAuth, async (req, res) => {
+router.get("/videos", requireAuth, rateLimit("videos", 120, 60, true), async (req, res) => {
   const f = z
     .object({
       game: z.enum(["cod", "fortnite", "other"]).optional(),
@@ -40,7 +45,7 @@ router.get("/videos", requireAuth, async (req, res) => {
 
 router.get("/videos/:id", requireAuth, async (req, res) => {
   const id = z.string().uuid().parse(req.params.id);
-  const v = (await q(`SELECT ${VIDEO_SELECT} ${VIDEO_FROM} WHERE v.id = $2`, [req.user!.id, id])).rows[0];
+  const v = (await q(`SELECT ${VIDEO_SELECT}, v.description ${VIDEO_FROM} WHERE v.id = $2`, [req.user!.id, id])).rows[0];
   if (!v) throw new HttpError(404, "Video not found");
   const related = await q(
     `SELECT ${VIDEO_SELECT} ${VIDEO_FROM}
@@ -51,9 +56,9 @@ router.get("/videos/:id", requireAuth, async (req, res) => {
   res.json({ video: v, related: related.rows });
 });
 
-// Re-pull videos from YouTube. Allowed in demo mode or for streamer accounts.
-router.post("/admin/sync-youtube", requireAuth, async (req, res) => {
-  if (!cfg.demoMode && req.user!.role !== "streamer") throw new HttpError(403, "Streamers only");
+// Re-pull videos from YouTube. Streamer accounts only, three times a day at most.
+router.post("/admin/sync-youtube", requireAuth, rateLimit("yt-sync", 3, 86400, true), async (req, res) => {
+  if (req.user!.role !== "streamer") throw new HttpError(403, "Streamers only"); // each run costs about 600 YouTube quota units
   if (!cfg.youtubeKey) throw new HttpError(400, "YOUTUBE_API_KEY is not set on the server");
   res.json(await syncYoutube());
 });
@@ -76,4 +81,10 @@ router.post("/demo/cleanup-fake-videos", requireAuth, async (_req, res) => {
   await q(`DELETE FROM video_progress WHERE video_id IN (SELECT id FROM videos WHERE left(youtube_id, 5) = 'demo_')`);
   const r = await q(`DELETE FROM videos WHERE left(youtube_id, 5) = 'demo_'`);
   res.json({ removed: r.rowCount });
+});
+
+// Test helper: run the abandoned-stream reaper now instead of waiting for its minute timer.
+router.post("/demo/reap", requireAuth, async (_req, res) => {
+  if (!cfg.demoMode) throw new HttpError(404, "Demo mode is off");
+  res.json({ reaped: await reapStaleStreams() });
 });

@@ -68,12 +68,33 @@ export function Call({ ctx }: { ctx: Ctx }) {
   return (
     <div className="stack">
       <h2>Live call and play session</h2>
-      {!status.eligible && (
-        <div className="panel">
-          <p>{status.reason}</p>
-          {status.reason?.startsWith("Complete") && <button className="btn" onClick={() => ctx.go("profile")}>See my character</button>}
-        </div>
-      )}
+      {!status.eligible && (() => {
+        const c = ctx.me.characters.find((x) => x.status === "building") ?? ctx.me.characters[0];
+        const pct = c ? Math.round((c.owned / c.total_parts) * 100) : 0;
+        return (
+          <div className="call-locked">
+            <section className="panel">
+              <span className="eyebrow">Locked</span>
+              <h3>{status.reason}</h3>
+              {c && (
+                <>
+                  <div className="bar" role="progressbar" aria-label={`${c.name} relic progress`} aria-valuemin={0} aria-valuemax={c.total_parts} aria-valuenow={c.owned} aria-valuetext={`${c.owned} of ${c.total_parts} relics`}><div style={{ width: `${pct}%` }} /></div>
+                  <span className="small muted">{c.owned} of {c.total_parts} relics on {c.name}</span>
+                </>
+              )}
+              {status.reason?.startsWith("Complete") && <button className="btn" onClick={() => ctx.go("profile")}>See my voyage</button>}
+            </section>
+            <section className="panel">
+              <h3>How it works</h3>
+              <ol className="steps">
+                <li><strong>Finish your ship.</strong> Watch videos and live streams to collect all 30 relics.</li>
+                <li><strong>Pick a streamer.</strong> Choose a partner streamer from your nation and a time that suits you.</li>
+                <li><strong>Join the call.</strong> Meet on video, then play COD or Fortnite together.</li>
+              </ol>
+            </section>
+          </div>
+        );
+      })()}
 
       {status.booked && (
         <div className="panel">

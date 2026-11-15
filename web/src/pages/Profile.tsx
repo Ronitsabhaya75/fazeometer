@@ -1,7 +1,9 @@
 import { Suspense, lazy, useCallback, useEffect, useState } from "react";
 import { api, type ProfileData, type Template } from "../api";
 import type { Ctx } from "../App";
-import { Character3D } from "../Character3D";
+import { Skeleton } from "../components/ui";
+
+const Character3D = lazy(() => import("../Character3D").then((m) => ({ default: m.Character3D })));
 import { VideoCard, gameLabel } from "../components/cards";
 import { countryName } from "./Login";
 
@@ -27,7 +29,14 @@ export function Profile({ ctx }: { ctx: Ctx }) {
   useEffect(() => { void load(); }, [load, relicTotal]);
   useEffect(() => { api<Template[]>("GET", "/catalog/characters").then(setTemplates).catch(() => {}); }, []);
 
-  if (!p) return <div className="panel">Loading profile…</div>;
+  if (!p) {
+    return (
+      <div className="profile" aria-busy="true">
+        <Skeleton h={96} r={12} />
+        <Skeleton h={420} r={12} />
+      </div>
+    );
+  }
 
   const ch = p.characters.find((c) => c.id === sel) ?? p.characters[0];
   const legend = sel === "legend";
@@ -60,20 +69,21 @@ export function Profile({ ctx }: { ctx: Ctx }) {
           <Stat n={p.stats.streamsCompleted} label="streams done" />
           <Stat n={p.stats.hoursWatched} label="hours" />
           <Stat n={p.stats.streak} label="day streak" />
+          <Stat n={p.stats.credits} label="credits" />
         </div>
       </header>
 
       {p.characters.length === 0 ? (
         <section className="row-sec">
-          <h2>Start your hero</h2>
-          <p className="muted small">Each hero has 30 relics. You get the Helm free, and earn the rest by finishing videos and live streams.</p>
+          <h2>Launch your ship</h2>
+          <p className="muted small">Your Odyssey ship has 30 relics. You get the Keel free, and earn the rest by finishing videos and live streams.</p>
           <div className="vgrid">
             {freeTemplates.map((t) => (
               <div key={t.id} className="card" style={{ borderTopColor: t.color }}>
                 <span className="tag">{gameLabel(t.game)}</span>
                 <strong>{t.name}</strong>
                 <span className="muted small">{t.theme}</span>
-                <button className="btn small" onClick={() => start(t.id)}>Start with 1 free relic</button>
+                <button className="btn small" onClick={() => start(t.id)}>Launch with 1 free relic</button>
               </div>
             ))}
           </div>
@@ -83,14 +93,14 @@ export function Profile({ ctx }: { ctx: Ctx }) {
           <div className="tabs">
             {p.characters.map((c) => <button key={c.id} className={!legend && ch?.id === c.id ? "tab on" : "tab"} onClick={() => setSel(c.id)}>{c.name}</button>)}
             <button className={legend ? "tab on" : "tab"} onClick={() => setSel("legend")}>Legend: Agamemnon</button>
-            {!me.premium && <button className="tab" onClick={() => ctx.go("premium")}>+ Second hero ($5)</button>}
+            {!me.premium && <button className="tab" onClick={() => ctx.go("premium")}>+ Agamemnon ($5)</button>}
           </div>
           <div className="show-grid">
             <div className="canvas">
               {legend ? (
                 <Suspense fallback={null}><LegendScene /></Suspense>
               ) : (
-                ch && <Character3D view={ch} freshIds={ctx.fresh} focusPosition={focus} />
+                ch && <Suspense fallback={null}><Character3D view={ch} freshIds={ctx.fresh} focusPosition={focus} /></Suspense>
               )}
               <div className="canvas-hud">
                 <strong>{legend ? "Agamemnon, king of Mycenae" : ch?.name}</strong>
@@ -116,13 +126,13 @@ export function Profile({ ctx }: { ctx: Ctx }) {
                     ))}
                   </div>
                   {ch.status === "complete" ? (
-                    <button className="btn small" onClick={() => ctx.go("call")}>Hero complete: book your live call</button>
+                    <button className="btn small" onClick={() => ctx.go("call")}>Ship complete: book your live call</button>
                   ) : (
                     <span className="muted small">Finish a video or live stream to earn the next relic. Videos give up to {ctx.cfg.videoPartsPerDay} a day.</span>
                   )}
                 </>
               )}
-              {legend && <p className="muted small">Complete all 30 relics on a hero to earn a live call with a partner streamer.</p>}
+              {legend && <p className="muted small">Build Agamemnon with 30 more relics. Finish any build to earn a live call with a partner streamer.</p>}
             </div>
           </div>
         </section>

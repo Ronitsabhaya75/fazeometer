@@ -24,7 +24,7 @@ declare global {
   }
 }
 
-export const signToken = (uid: string) => jwt.sign({ uid }, cfg.jwtSecret, { expiresIn: "30d" });
+export const signToken = (uid: string) => jwt.sign({ uid }, cfg.jwtSecret, { expiresIn: "7d" });
 
 export const verifyToken = (token: string): string | null => {
   try {

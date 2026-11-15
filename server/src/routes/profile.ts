@@ -16,7 +16,7 @@ router.get("/profile", requireAuth, async (req, res) => {
     q(`SELECT count(*) FILTER (WHERE coverage >= $2)::int AS completed, coalesce(sum(minutes_watched),0)::int AS minutes FROM watch_sessions WHERE user_id=$1`, [u.id, cfg.minCoverage]),
     q(`SELECT count(*)::int AS n FROM user_parts up JOIN user_characters uc ON uc.id=up.user_character_id WHERE uc.user_id=$1`, [u.id]),
     q(
-      `SELECT uc.id, uc.status, uc.completed_at, t.id AS template_id, t.name, t.game, t.slot_number, t.tier, t.color, t.total_parts,
+      `SELECT uc.id, uc.status, uc.completed_at, t.id AS template_id, t.name, t.game, t.kind, t.slot_number, t.tier, t.color, t.total_parts,
               (SELECT count(*)::int FROM user_parts up WHERE up.user_character_id = uc.id) AS owned
        FROM user_characters uc JOIN character_templates t ON t.id = uc.template_id WHERE uc.user_id=$1 ORDER BY t.slot_number`,
       [u.id],
